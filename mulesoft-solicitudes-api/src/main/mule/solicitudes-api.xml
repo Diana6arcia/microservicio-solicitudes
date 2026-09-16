@@ -1,0 +1,443 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd">
+	<http:listener-config name="HTTP_Listener_config"
+		doc:name="HTTP Listener config"
+		doc:id="35529da6-1f04-495a-91f5-5dd4b4531a92">
+		<http:listener-connection host="0.0.0.0"
+			port="${http.port}" />
+	</http:listener-config>
+	<configuration-properties
+		doc:name="Configuration properties"
+		doc:id="be9c649b-c5c0-4c52-9543-5a711e237cfd"
+		file="application.properties" />
+	<db:config name="Database_Config" doc:name="Database Config"
+		doc:id="aa3cf563-3114-4b2f-adc6-c622a6b8e09b">
+		<db:my-sql-connection host="${db.host}"
+			port="${db.port}" user="${db.user}" password="${db.password}"
+			database="${db.database}" />
+	</db:config>
+	<file:config name="File_Config" doc:name="File Config"
+		doc:id="2396517b-9612-4cef-88b7-dc74592ec6a2">
+		<file:connection workingDir="${evidence.path}" />
+	</file:config>
+	<sftp:config name="SFTP_Config" doc:name="SFTP Config"
+		doc:id="5d6bff6e-716c-495a-a3a2-2db617378e23">
+		<sftp:connection workingDir="${sftp.path}"
+			host="${sftp.host}" port="${sftp.port}" username="${sftp.user}"
+			password="${sftp.password}" />
+	</sftp:config>
+	<!-- FLUJO POST -->
+	<flow name="POST-solicitudes-apiFlow"
+		doc:id="65537c41-3a53-4600-aea5-46e3fcf9a6f2">
+		<http:listener doc:name="Listener"
+			doc:id="63bc9b2d-3651-4277-b173-c4d818561fa0"
+			path="/api/v1/solicitudes" allowedMethods="POST"
+			config-ref="HTTP_Listener_config">
+			<http:response
+				statusCode="#[vars.httpStatus default 200]" />
+		</http:listener>
+		<set-variable value="#[uuid()]"
+			doc:name="Set Variable correlationId"
+			doc:id="b11cc5a8-e54d-4607-89e2-9a3c1c878475"
+			variableName="correlationId" />
+		<logger level="INFO" doc:name="Logger Inicio"
+			doc:id="35a6c7fb-57d7-4744-b41d-dd8066765c6c"
+			message='#["[" ++ vars.correlationId ++ "] Solicitud recibida"]' />
+		<set-variable value="#[payload]"
+			doc:name="Set Variable originalRequest"
+			doc:id="094326f2-3ad8-4e44-ba48-76600dfdfbaa"
+			variableName="originalRequest" />
+		<ee:transform doc:name="Transform Message"
+			doc:id="5ea5fada-1a5c-4aa9-9f15-b7c4abe3faef">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+
+var body = payload
+
+var errors = [
+    if (isEmpty(body.clienteId default "")) "clienteId es requerido" else null,
+    if (isEmpty(body.tipo default "")) "tipo es requerido" else null,
+    if (isEmpty(body.descripcion default "")) "descripcion es requerida" else null,
+    if (!isEmpty(body.tipo default "")
+    and !(["ALTA", "CAMBIO", "BAJA"] contains upper(body.tipo)))
+        "tipo debe ser ALTA, CAMBIO o BAJA" 
+        else null
+] filter ($ != null)
+
+---
+{
+    valid: isEmpty(errors),
+    errors: errors
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<choice doc:name="Choice"
+			doc:id="f250fef4-62fb-4312-a557-4b9af746315c">
+			<when expression="#[payload.valid == false]">
+				<logger level="INFO" doc:name="Logger validación fallida"
+					doc:id="8099c5e1-4d87-4cba-82e1-19dcc0c4036d"
+					message='#["[" ++ vars.correlationId ++ "] Validación de datos fallida"]' />
+				<set-variable value="#[payload.errors]"
+					doc:name="Set Variable inputErrors"
+					doc:id="17e9bb99-5dd0-496c-a997-a5c8f388724e"
+					variableName="inputErrors" />
+				<set-variable value="400"
+					doc:name="Set Variable httpStatus 400"
+					doc:id="b2bab328-51ad-4531-952a-f5ed004a8b52"
+					variableName="httpStatus" />
+				<raise-error doc:name="Raise error"
+					doc:id="763d53bb-1e23-452e-a324-e5284f90c0f9"
+					type="VALIDATION: INVALID_INPUT" description="Entrada Inválida" />
+			</when>
+			<otherwise>
+				<logger level="INFO" doc:name="Logger Validación exitosa"
+					doc:id="5172f927-b68e-412f-a6d2-f00eb1f882a4"
+					message='#["[" ++ vars.correlationId ++ "] Validación exitosa, iniciando insert en BD"]' />
+				<set-variable value="#[now() as LocalDateTime]"
+					doc:name="Set Variable fechaRegistro"
+					doc:id="13670e10-e202-4dea-bdbf-982b9267edd9"
+					variableName="fechaRegistro" />
+				<db:insert doc:name="Insert"
+					doc:id="a678e188-9001-4543-91c2-aa7e945f9eff"
+					config-ref="Database_Config" autoGenerateKeys="true">
+					<db:sql><![CDATA[INSERT INTO solicitudes
+(
+    cliente_id,
+    tipo,
+    descripcion,
+    estado,
+    fecha_registro,
+    correlation_id
+)
+VALUES
+(
+    :cliente_id,
+    :tipo,
+    :descripcion,
+    :estado,
+    :fecha_registro,
+    :correlation_id
+)]]></db:sql>
+					<db:input-parameters><![CDATA[#[{
+	cliente_id: vars.originalRequest.clienteId,
+	tipo: vars.originalRequest.tipo,
+	descripcion: vars.originalRequest.descripcion,
+	estado: "REGISTRADA",
+	fecha_registro: vars.fechaRegistro,
+	correlation_id: vars.correlationId
+}]]]></db:input-parameters>
+				</db:insert>
+				<set-variable value="#[payload[0].GENERATED_KEY]"
+					doc:name="Set Variable idSolicitud"
+					doc:id="7051834e-a8ad-4bf0-90f0-2e55723ab02c"
+					variableName="idSolicitud" />
+				<logger level="INFO" doc:name="Logger respuesta BD"
+					doc:id="d4d74c0b-de2e-4c8b-b7ae-a7e6d3ee4eaf"
+					message='#["[" ++ vars.correlationId ++ "] Registro almacenado correctamente con id " ++ vars.idSolicitud]' />
+				<ee:transform doc:name="Transform Message"
+					doc:id="481713ed-8764-4364-9c51-c3a3aa293ab8">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    id: vars.idSolicitud,
+    clienteId: vars.originalRequest.clienteId,
+    tipo: vars.originalRequest.tipo,
+    descripcion: vars.originalRequest.descripcion,
+    estado: "REGISTRADA",
+    fechaRegistro: vars.fechaRegistro,
+    correlationId: vars.correlationId
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<file:write doc:name="Write JSON local"
+					doc:id="bd28f4f4-ddaf-4691-860f-ee8b75f7e2df"
+					config-ref="File_Config"
+					path="#[p('evidence.path') ++ &quot;/solicitud-&quot; ++ (vars.idSolicitud as String) ++ &quot;.json&quot;]" />
+				<logger level="INFO" doc:name="Logger escritura de archivo"
+					doc:id="63e13e04-9524-4ee5-abec-27ed41234265"
+					message='#["[" ++ vars.correlationId ++ "] Escritura de archivo exitosa"]' />
+				<sftp:write doc:name="Write JSON fileServer"
+					doc:id="a4215316-4a63-48b8-9fdb-d277b6a439dc"
+					config-ref="SFTP_Config"
+					path="#[p('sftp.path') ++ &quot;/solicitud-&quot; ++ (vars.idSolicitud as String) ++ &quot;.json&quot;]" />
+				<logger level="INFO" doc:name="Logger envío SFTP"
+					doc:id="fc1a9cc9-ffae-4365-a37d-2a5bc08f05b9"
+					message='#["[" ++ vars.correlationId ++ "] Evidencia enviada correctamente a SFTP. Archivo=solicitud-" ++ (vars.idSolicitud as String) ++ ".json"]' />
+				<set-variable value="201"
+					doc:name="Set Variable httpStatus 201"
+					doc:id="044eba45-20a5-463b-8594-88c05a7e6717"
+					variableName="httpStatus" />
+			</otherwise>
+		</choice>
+		<error-handler>
+			<on-error-continue enableNotifications="true"
+				logException="true" doc:name="On Error Continue"
+				doc:id="2528360c-0926-4c15-912e-4a811b8ff387"
+				type="VALIDATION: INVALID_INPUT">
+				<ee:transform doc:name="Transform Message"
+					doc:id="205c277a-80d3-45f9-bab4-f461c4667d9f">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    error: "Bad Request",
+    detail: vars.inputErrors default []
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</on-error-continue>
+			<on-error-continue enableNotifications="true"
+				logException="true" doc:name="On Error Continue"
+				doc:id="3a4d0bdc-fc3c-4920-bd90-1ce5b3c24133" type="DB:*">
+				<logger level="ERROR" doc:name="Logger ERROR EN BD"
+					doc:id="4e3990d8-58b8-4151-9218-c9741cfc9cea"
+					message='#["[" ++ vars.correlationId ++ "] Error de base de datos"]' />
+				<ee:transform doc:name="Transform Message"
+					doc:id="17b42889-02b2-4f50-b0f3-810eced4b14a">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    error: "Internal error",
+    detail: "No fue posible guardar la solicitud en base de datos."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable value="500"
+					doc:name="Set Variable httpStatus 500"
+					doc:id="e63fd82a-a620-44c0-9a2d-bcbfee876842"
+					variableName="httpStatus" />
+			</on-error-continue>
+			<on-error-continue enableNotifications="true"
+				logException="true" doc:name="On Error Continue"
+				doc:id="0cd89dd4-33ba-4a1f-b81f-94bd1bb90ff6" type="FILE:*">
+				<logger level="ERROR" doc:name="Logger ERROR EN ARCHIVOS"
+					doc:id="a51fe521-4b46-41de-a4ba-2b3a38559776"
+					message='#["[" ++ vars.correlationId ++ "] Error al generar el archivo"]' />
+				<ee:transform doc:name="Transform Message"
+					doc:id="3bdf2908-a31d-4af3-983f-4a1eff8d24e4">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    error: "Internal error",
+    detail: "No fue posible generar el archivo de evidencia."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable value="500"
+					doc:name="Set Variable httpStatus 500"
+					doc:id="96a02879-9879-44a0-9df3-f1f2679a6a88"
+					variableName="httpStatus" />
+			</on-error-continue>
+			<on-error-continue enableNotifications="true"
+				logException="true" doc:name="On Error Continue"
+				doc:id="2ee099be-180c-4565-83cf-4fbd6b1d54eb" type="SFTP:*">
+				<logger level="ERROR" doc:name="Logger ERROR EN SFTP"
+					doc:id="91b89a20-f437-4b61-bd13-7dc25301dc0c"
+					message='#["[" ++ vars.correlationId ++ "] Error al enviar archivo a SFTP"]' />
+				<ee:transform doc:name="Transform Message"
+					doc:id="fcb260cb-4499-4980-8e8b-26465bb4feb0">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    error: "Internal error",
+    detail: "No fue posible enviar la evidencia al servidor SFTP."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable value="500"
+					doc:name="Set Variable httpStatus 500"
+					doc:id="454312d8-285f-4a59-8811-1319b49cb3b7"
+					variableName="httpStatus" />
+			</on-error-continue>
+			<on-error-continue enableNotifications="true"
+				logException="true" doc:name="On Error Continue"
+				doc:id="8a1442f1-d571-4b50-ba8b-87efd97a6a50" type="ANY">
+				<logger level="ERROR" doc:name="Logger ERROR INTERNO"
+					doc:id="92ed43fd-99c0-426a-bad1-e6913ce0bab9"
+					message='#["[" ++ vars.correlationId ++ "] Error no controlado"]' />
+				<ee:transform doc:name="Transform Message"
+					doc:id="ead354f7-cd05-48a3-9bbe-08added795d4">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    error: "Internal error",
+    detail: "Ocurrió un error interno al procesar la solicitud."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable value="500"
+					doc:name="Set Variable httpStatus 500"
+					doc:id="c06c5eb8-b7a5-445a-9537-6fe2d5bba43b"
+					variableName="httpStatus" />
+			</on-error-continue>
+		</error-handler>
+	</flow>
+	<flow name="GET-solicitudes-apiFlow"
+		doc:id="fb3424ac-b5f4-4aad-a98f-e4aa3433e891">
+		<http:listener doc:name="Listener"
+			doc:id="f7752f6f-9484-4039-a5b2-6fe75c003116"
+			config-ref="HTTP_Listener_config" path="/api/v1/solicitudes/{id}"
+			allowedMethods="GET">
+			<http:response
+				statusCode="#[vars.httpStatus default 200]" />
+		</http:listener>
+		<set-variable value="#[uuid()]"
+			doc:name="Set Variable correlationId"
+			doc:id="298b778f-f428-460d-8936-4a12d51cfc68"
+			variableName="correlationId" />
+		<set-variable value="#[attributes.uriParams.id]"
+			doc:name="Set Variable idSolicitud"
+			doc:id="de4f44d7-7e44-41a1-8745-e76c79e7cc60"
+			variableName="idSolicitud" />
+		<logger level="INFO" doc:name="Logger inicio consulta" doc:id="e6768f5f-9482-408f-adc8-9dc016cf8b6b" message='#["[" ++ vars.correlationId ++ "] Consulta de solicitud recibida. id = " ++ vars.idSolicitud]'/>
+		<choice doc:name="Choice" doc:id="8e465538-ee7c-4686-87a1-f97e8577859a" >
+			<when expression="#[if (vars.idSolicitud == null)&#10;    true&#10;else if (not ((vars.idSolicitud as String) matches /^\d+$/))&#10;    true&#10;else&#10;    (vars.idSolicitud as Number) &lt;= 0]">
+				<logger level="INFO" doc:name="Logger id inválido" doc:id="f68f0a75-8a64-4632-9d51-3eece77f9929" message='#["[" ++ vars.correlationId ++ "] Id de solicitud no tiene formato correcto"]'/>
+				<set-variable value="400" doc:name="Set Variable httpStatus 400" doc:id="0bf0cbf0-6b4d-4993-b0b5-04ff80df85ce" variableName="httpStatus"/>
+				<ee:transform doc:name="Transform Message" doc:id="1e1c93ad-4258-47e0-9e22-503854911da9" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"error": "Id de entrada inválido",
+	"detail": "El id debe ser un número entero mayor a cero"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+			<otherwise >
+				<db:select doc:name="Select" doc:id="57d614ca-2314-48c4-94b3-46337d32a7ac" config-ref="Database_Config">
+			<db:sql><![CDATA[SELECT
+    id,
+    cliente_id,
+    tipo,
+    descripcion,
+    estado,
+    fecha_registro,
+    correlation_id
+FROM solicitudes
+WHERE id = :id]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	id: vars.idSolicitud
+}]]]></db:input-parameters>
+		</db:select>
+				<choice doc:name="Choice" doc:id="6d4cc951-8ac0-48a8-8387-79b09311ed69">
+					<when expression="#[isEmpty(payload)]">
+						<logger level="INFO" doc:name="Logger Solicitud no existe" doc:id="bc602748-cc87-40c4-9919-bb4d44c21c23" message='#["[" ++ vars.correlationId ++ "] La solicitud no existe. id=" ++ (vars.idSolicitud as String)]' />
+						<set-variable value="404" doc:name="Set Variable httpStatus 404" doc:id="f5f57edb-9979-411e-b212-d318857aeab2" variableName="httpStatus" />
+						<ee:transform doc:name="Transform Message" doc:id="01cd1c39-1021-45a2-9b8b-0795c2355fec">
+							<ee:message>
+								<ee:set-payload><![CDATA[%dw 2.0
+		output application/json
+		---
+		{
+			"error": "Not Found",
+			"detail": "La solicitud con id " ++ (vars.idSolicitud as String) ++ " no existe"
+		}]]></ee:set-payload>
+							</ee:message>
+						</ee:transform>
+					</when>
+					<otherwise>
+						<set-variable value="#[payload[0]]" doc:name="Set Variable solicitud" doc:id="dc84b8f9-e0a7-43e0-83a0-2fe55e67e316" variableName="solicitud" />
+						<logger level="INFO" doc:name="Logger Solicitud si existe" doc:id="8190d25d-4cbe-4a04-b33e-fa4df5764cf7" message='#["[" ++ vars.correlationId ++ "] Solicitud encontrada en BD. id=" ++ (vars.solicitud.id as String)]' />
+						<try doc:name="Try" doc:id="22bf87f9-05c3-4625-ab0f-11792e405f06">
+							<file:read doc:name="Read" doc:id="f8c97590-fb79-4698-8237-fd947984a9f8" config-ref="File_Config" path="#[p('evidence.path') ++ &quot;/solicitud-&quot; ++ (vars.solicitud.id as String) ++ &quot;.json&quot;]" />
+							<ee:transform doc:name="Transform Message" doc:id="1573569f-0093-4824-a418-2658f569157e">
+							<ee:message>
+								<ee:set-payload><![CDATA[%dw 2.0
+		output application/json
+		---
+		{
+		    id: vars.solicitud.id,
+		    clienteId: vars.solicitud.cliente_id,
+		    tipo: vars.solicitud.tipo,
+		    descripcion: vars.solicitud.descripcion,
+		    estado: vars.solicitud.estado,
+		    fechaRegistro: vars.solicitud.fecha_registro,
+		    correlationId: vars.solicitud.correlation_id,
+		    evidencia: {
+		        archivo: "solicitud-" ++ (vars.solicitud.id as String) ++ ".json",
+		        existe: true,
+		    }
+		}]]></ee:set-payload>
+							</ee:message>
+						</ee:transform>
+							<error-handler>
+								<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="66185be2-080b-43c2-91eb-c4afa16d13c2">
+									<choice doc:name="Choice" doc:id="334cd849-c481-4d7f-9a4f-1bca664131a0">
+										<when expression='#[error.errorType.namespace == "FILE" and error.errorType.identifier == "ILLEGAL_PATH"]'>
+											<logger level="INFO" doc:name="Logger archivo no existe" doc:id="deb7a72c-a1f0-47f8-9b08-a1e68d978141" message='#["[" ++ (vars.correlationId as String) ++ "] La solicitud existe en BD, pero el archivo asociado no está disponible. id=" ++ (vars.solicitud.id as String)]' />
+											<ee:transform doc:name="Transform Message" doc:id="435b0af8-6503-499c-be99-676ac6be10b9">
+												<ee:message>
+													<ee:set-payload><![CDATA[%dw 2.0
+		output application/json
+		---
+		{
+		    id: vars.solicitud.id,
+		    clienteId: vars.solicitud.cliente_id,
+		    tipo: vars.solicitud.tipo,
+		    descripcion: vars.solicitud.descripcion,
+		    estado: vars.solicitud.estado,
+		    fechaRegistro: vars.solicitud.fecha_registro,
+		    correlationId: vars.solicitud.correlation_id,
+		    evidencia: {
+		        archivo: "solicitud-" ++ (vars.solicitud.id as String) ++ ".json",
+		        existe: false,
+		    }
+		}]]></ee:set-payload>
+												</ee:message>
+											</ee:transform>
+											<set-variable value="200" doc:name="Set Variable httpStatus 200" doc:id="c850dead-3e86-40e8-b889-8e810b6b3a29" variableName="httpStatus" />
+										</when>
+										<otherwise>
+											<logger level="INFO" doc:name="Logger error de archivo" doc:id="b13028cd-3a1f-4f8f-955f-2ed941be2b8c" message='#["[" ++ (vars.correlationId as String) ++ "] Error al consultar archivo asociado. id=" ++ (vars.solicitud.id as String)]' />
+											<ee:transform doc:name="Transform Message" doc:id="a665e5b5-1074-4485-869d-2efb60a503bb">
+												<ee:message>
+													<ee:set-payload><![CDATA[%dw 2.0
+		output application/json
+		---
+		{
+		  "error": "Internal error",
+		  "detail": "Ocurrió un error al consultar el archivo asociado a la solicitud."
+		}]]></ee:set-payload>
+												</ee:message>
+											</ee:transform>
+											<set-variable value="500" doc:name="Set Variable httpStatus 500" doc:id="5ad78a37-4b84-422e-846a-a1f7fde54cab" variableName="httpStatus" />
+										</otherwise>
+									</choice>
+								</on-error-continue>
+							</error-handler>
+						</try>
+					</otherwise>
+				</choice>
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
